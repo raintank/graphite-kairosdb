@@ -9,7 +9,7 @@ setup(
     author='Anthony Woods',
     author_email='awoods@raintank.io',
     description=('Kairosdb backend plugin for graphite-api'),
-    long_description=open('README.rst').read(),
+    long_description='',
     py_modules=('graphite_kairosdb',),
     zip_safe=False,
     include_package_data=True,
