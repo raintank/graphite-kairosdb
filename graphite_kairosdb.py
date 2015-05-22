@@ -52,7 +52,7 @@ class KairosdbFinder(object):
 
     def find_nodes(self, query):
         logger.debug("find_nodes")
-        
+
         seen_branches = set()
         leaf_regex = self.compile_regex(query, False)
         #query Elasticsearch for paths
@@ -79,7 +79,7 @@ class KairosdbFinder(object):
            "end_absolute": end_time * 1000,
            "metrics": []
         }
-        
+
         for node in nodes:
             match = {
                 "tags": node.reader.metric.tags,
@@ -93,33 +93,47 @@ class KairosdbFinder(object):
         max_points = (end_time - start_time) / step
         for q in query['metrics']:
             q['limit'] = max_points
-        logger.debug(start=start_time, end=end_time)
         resp = requests.post("%s/api/v1/datapoints/query" % self.config['uri'], json.dumps(query))
         data = resp.json()
-
         series = {}
+        delta = None
         for i in range(0, len(data['queries'])):
             datapoints = []
             next_time = start_time
             pos = 0
             max_pos = len(data['queries'][i]['results'][0]['values'])
-            logger.debug(max_points=max_points, result_len=max_pos)
             if max_pos == 0:
                 continue
+            if delta is None:
+                delta = (data['queries'][i]['results'][0]['values'][0][0]/1000) % start_time
 
-            logger.debug(first_point=data['queries'][i]['results'][0]['values'][0][0], last_point=data['queries'][i]['results'][0]['values'][-1][0])
+            logger.debug(
+                caller="fetch_multi()",
+                num_points=max_pos,
+                start_time=start_time,
+                end_time=end_time,
+                first_point=data['queries'][i]['results'][0]['values'][0][0],
+                last_point=data['queries'][i]['results'][0]['values'][-1][0]
+            )
             while next_time <= end_time:
+                # check if there are missing values from the end of the time window
                 if pos >= max_pos:
                     datapoints.append(None)
                     next_time += step
                     continue
 
                 ts = data['queries'][i]['results'][0]['values'][pos][0]/1000
-                if (ts + step) <= start_time:
+
+                # check if the first point is from before the start_time
+                if ts <= start_time:
                     pos += 1
                     continue
+
+                # read in the metric value.
                 v = data['queries'][i]['results'][0]['values'][pos][1]
-                while ts > next_time:
+
+                # pad missing points with null.
+                while ts > (next_time + step):
                     datapoints.append(None)
                     next_time += step
                 datapoints.append(v)
@@ -127,8 +141,9 @@ class KairosdbFinder(object):
                 pos += 1
 
             series[nodes[i].path] = datapoints
-
-        time_info = (start_time, end_time, step)
+        if delta is None:
+            delta = 0
+        time_info = (start_time + delta, end_time, step)
         return time_info, series
 
     def compile_regex(self, query, branch=False):
@@ -203,3 +218,4 @@ class KairosdbReader(object):
 
     def fetch(self, startTime, endTime):
         pass
+
