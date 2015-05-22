@@ -75,7 +75,7 @@ class KairosdbFinder(object):
         step = None
 
         query = {
-           "start_absolute": start_time * 1000,
+           "start_absolute": (start_time + 1) * 1000,
            "end_absolute": end_time * 1000,
            "metrics": []
         }
