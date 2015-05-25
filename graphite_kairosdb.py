@@ -90,7 +90,8 @@ class KairosdbFinder(object):
             if step is None or node.reader.metric.interval < step:
                 step = node.reader.metric.interval
 
-        max_points = (end_time - start_time) / step
+        # get the ceiling of the time range divided by step.
+        max_points = -(-(end_time - start_time) // step)
         for q in query['metrics']:
             q['limit'] = max_points
         resp = requests.post("%s/api/v1/datapoints/query" % self.config['uri'], json.dumps(query))
