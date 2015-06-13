@@ -105,9 +105,6 @@ class KairosdbFinder(object):
             max_pos = len(data['queries'][i]['results'][0]['values'])
             if max_pos == 0:
                 continue
-            if delta is None:
-                delta = (data['queries'][i]['results'][0]['values'][0][0]/1000) % start_time
-
             logger.debug(
                 caller="fetch_multi()",
                 num_points=max_pos,
@@ -138,6 +135,8 @@ class KairosdbFinder(object):
                     datapoints.append(None)
                     next_time += step
                 datapoints.append(v)
+                if delta is None:
+                    delta = ts % next_time
                 next_time += step
                 pos += 1
 
