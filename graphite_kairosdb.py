@@ -73,9 +73,9 @@ class KairosdbFinder(object):
 
     def fetch_multi(self, nodes, start_time, end_time):
         step = None
-
+        start_time += 1
         query = {
-           "start_absolute": (start_time + 1) * 1000,
+           "start_absolute": start_time * 1000,
            "end_absolute": end_time * 1000,
            "metrics": []
         }
@@ -90,7 +90,8 @@ class KairosdbFinder(object):
             if step is None or node.reader.metric.interval < step:
                 step = node.reader.metric.interval
 
-        max_points = (end_time - start_time) / step
+        # get the ceiling of the time range divided by step.
+        max_points = -(-(end_time - (start_time - 1)) // step)
         for q in query['metrics']:
             q['limit'] = max_points
         resp = requests.post("%s/api/v1/datapoints/query" % self.config['uri'], json.dumps(query))
@@ -104,9 +105,6 @@ class KairosdbFinder(object):
             max_pos = len(data['queries'][i]['results'][0]['values'])
             if max_pos == 0:
                 continue
-            if delta is None:
-                delta = (data['queries'][i]['results'][0]['values'][0][0]/1000) % start_time
-
             logger.debug(
                 caller="fetch_multi()",
                 num_points=max_pos,
@@ -125,7 +123,7 @@ class KairosdbFinder(object):
                 ts = data['queries'][i]['results'][0]['values'][pos][0]/1000
 
                 # check if the first point is from before the start_time
-                if ts <= start_time:
+                if ts < start_time:
                     pos += 1
                     continue
 
@@ -137,6 +135,8 @@ class KairosdbFinder(object):
                     datapoints.append(None)
                     next_time += step
                 datapoints.append(v)
+                if delta is None:
+                    delta = ts % next_time
                 next_time += step
                 pos += 1
 
