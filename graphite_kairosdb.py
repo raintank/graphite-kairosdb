@@ -189,7 +189,7 @@ class KairosdbFinder(object):
             }
           }
         }
-        ret = self.es.search(index="definitions", doc_type="metric", body=search_body, size=1000 )
+        ret = self.es.search(index="definitions", doc_type="metric", body=search_body, size=10000 )
         matches = []
         if len(ret["hits"]["hits"]) > 0:
             for hit in ret["hits"]["hits"]:
