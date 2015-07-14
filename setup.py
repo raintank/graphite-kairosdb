@@ -24,7 +24,7 @@ setup(
         'Topic :: System :: Monitoring',
     ),
     install_requires=(
-        'requests',
+        'cassandra-driver',
         'elasticsearch',
         'flask',
         'graphite_api'
