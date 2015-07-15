@@ -49,6 +49,27 @@ def unpack_kairos_long(buffer):
     value = unpack_kairos_unsignedlong(buffer)
     return ((value >> 1) ^ -(value & 1))
 
+
+class NullStatsd():
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
+        pass
+
+    def timer(self, key, val=None):
+        return self
+
+    def timing(self, key, val):
+        pass
+
+try:
+    from graphite_api.app import app
+    statsd = app.statsd
+    assert statsd is not None
+except:
+    statsd = NullStatsd()
+
 class RaintankMetric(object):
     __slots__ = ('id', 'org_id', 'name', 'metric', 'interval', 'tags', 'thresholds',
         'target_type', 'state', 'keepAlives', 'unit', 'lastUpdate', 'public', 'leaf')
@@ -182,9 +203,9 @@ class KairosdbFinder(object):
                             value = struct.unpack(">d", row.value)[0]
                         else:
                             value = unpack_kairos_long(row.value)
-                        except Exception as e:
-                            logger.error("failed to parse value", exception=e, data_type=row_key['data_type'])
-                            value = None
+                    except Exception as e:
+                        logger.error("failed to parse value", exception=e, data_type=row_key['data_type'])
+                        value = None
                     datapoints[path][ts] = value
 
         return datapoints
@@ -195,41 +216,43 @@ class KairosdbFinder(object):
             if step is None or node.reader.metric.interval < step:
                 step = node.reader.metric.interval
 
-        data = self.fetch_from_cassandra(nodes, start_time, end_time)
-        series = {}
-        delta = None
-        for path, points in data.items():
-            datapoints = []
-            next_time = start_time;
-            timestamps = points.keys()
-            timestamps.sort()
-            max_pos = len(timestamps)
-            pos = 0;
-            if max_pos == 0:
-                continue
-            if delta is None:
-                delta = timestamps[0] % start_time
+        with statsd.timer("graphite-api.fetch.kairosdb_query.query_duration"):
+            data = self.fetch_from_cassandra(nodes, start_time, end_time)
+            series = {}
+            delta = None
+            with statsd.timer("graphite-api.fetch.unmarshal_kairosdb_resp.duration"):
+                for path, points in data.items():
+                    datapoints = []
+                    next_time = start_time;
+                    timestamps = points.keys()
+                    timestamps.sort()
+                    max_pos = len(timestamps)
+                    pos = 0;
+                    if max_pos == 0:
+                        continue
+                    if delta is None:
+                        delta = timestamps[0] % start_time
 
-            while next_time <= end_time:
-                # check if there are missing values from the end of the time window
-                if pos >= max_pos:
-                    datapoints.append(None)
-                    next_time += step
-                    continue
+                    while next_time <= end_time:
+                        # check if there are missing values from the end of the time window
+                        if pos >= max_pos:
+                            datapoints.append(None)
+                            next_time += step
+                            continue
 
-                ts = timestamps[pos]
-                # read in the metric value.
-                v = points[ts]
+                        ts = timestamps[pos]
+                        # read in the metric value.
+                        v = points[ts]
 
-                # pad missing points with null.
-                while ts > (next_time + step):
-                    datapoints.append(None)
-                    next_time += step
+                        # pad missing points with null.
+                        while ts > (next_time + step):
+                            datapoints.append(None)
+                            next_time += step
 
-                datapoints.append(v)
-                next_time += step
-                pos += 1
-            series[path] = datapoints
+                        datapoints.append(v)
+                        next_time += step
+                        pos += 1
+                    series[path] = datapoints
 
         if delta is None:
             delta = 0
@@ -279,16 +302,18 @@ class KairosdbFinder(object):
             }
           }
         }
-        ret = self.es.search(index="definitions", doc_type="metric", body=search_body, size=10000 )
-        matches = []
-        if len(ret["hits"]["hits"]) > 0:
-            for hit in ret["hits"]["hits"]:
-                leaf = False
-                source = hit['_source']
-                if leaf_regex.match(source['name']) is not None:
-                    leaf = True
-                matches.append(RaintankMetric(source, leaf))
-        logger.debug('search_series', matches=len(matches))
+
+        with statsd.timer("graphite-api.search_series.es_search.query_duration"):
+            ret = self.es.search(index="definitions", doc_type="metric", body=search_body, size=10000 )
+            matches = []
+            if len(ret["hits"]["hits"]) > 0:
+                for hit in ret["hits"]["hits"]:
+                    leaf = False
+                    source = hit['_source']
+                    if leaf_regex.match(source['name']) is not None:
+                        leaf = True
+                    matches.append(RaintankMetric(source, leaf))
+            logger.debug('search_series', matches=len(matches))
         return matches
 
 
