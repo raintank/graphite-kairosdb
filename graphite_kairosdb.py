@@ -8,14 +8,46 @@ from graphite_api.intervals import Interval, IntervalSet
 from graphite_api.node import LeafNode, BranchNode
 from flask import g
 import json
-from structlog import get_logger
-logger = get_logger()
+import structlog
+logger = structlog.get_logger('graphite_api')
 
+def parse_row_ts(ts, row_timestamp):
+    timestamp = struct.unpack(">L", ts)[0]
+    timestamp = timestamp >> 1
+    return (timestamp + row_timestamp) / 1000
 
-def debug(*args, **kwargs):
-    import pprint
-    pprint.pprint((args, kwargs))
-logger.debug = debug
+def parse_row_key(key):
+    #read to first null byte to get measurement name
+    measurement, key = key.split('\0', 1)
+    # the next 8 bytes are the row_timestamp
+    row_timestamp = struct.unpack(">q", key[:8])[0]
+    #byte 8 is a null byte,
+    #byte 9 is the length of the data_type label.
+    data_type_size = struct.unpack(">b", key[9:10])[0]
+    #From byte 10 for data_type_size bytes is the data_type label
+    data_type = key[10:10+data_type_size]
+    # the rest of the bytes are the tags string.
+    tags = key[10+data_type_size:]
+
+    return {"measurement": measurement, "row_timestamp": row_timestamp, "data_type": data_type, "tags": tags}
+
+# https://github.com/kairosdb/kairosdb/blob/master/src/main/java/org/kairosdb/util/Util.java#L140
+def unpack_kairos_unsignedlong(buffer):
+    result = 0
+    pos = 0
+    shift = 0
+    while shift < 64:
+        b = struct.unpack(">b", buffer[pos])[0]
+        result |= (b & 0x7f) << shift
+        if (b & 0x80) == 0:
+            return result
+        shift += 7
+        pos += 1
+    raise Exception("Variable length quantity is too long")
+
+def unpack_kairos_long(buffer):
+    value = unpack_kairos_unsignedlong(buffer)
+    return ((value >> 1) ^ -(value & 1))
 
 class RaintankMetric(object):
     __slots__ = ('id', 'org_id', 'name', 'metric', 'interval', 'tags', 'thresholds',
@@ -38,6 +70,7 @@ class RaintankMetric(object):
     def is_leaf(self):
         return self.leaf
 
+
 class KairosdbFinder(object):
     __fetch_multi__ = "kairosdb"
 
@@ -54,14 +87,12 @@ class KairosdbFinder(object):
                 "url": es.get('url', 'http://localhost:9200')
             }
         }
-        print self.config
+        logger.info("initialize kairosdbFinder", config=self.config)
         self.es = Elasticsearch([self.config['es']['url']])
         self.cassandra = Cluster(self.config['cassandra']['hosts'], self.config['cassandra']['port']).connect('kairosdb')
-        self.metric_lookup_stmt = self.cassandra.prepare('SELECT * FROM data_points WHERE key=? AND column1 > ? AND column1 < ?')
+        self.metric_lookup_stmt = self.cassandra.prepare('SELECT * FROM data_points WHERE key=? AND column1 > ? AND column1 <= ?')
 
     def find_nodes(self, query):
-        logger.debug("find_nodes")
-
         seen_branches = set()
         leaf_regex = self.compile_regex(query, False)
         #query Elasticsearch for paths
@@ -76,7 +107,6 @@ class KairosdbFinder(object):
                     if name not in seen_branches:
                         seen_branches.add(name)
                         if leaf_regex.match(name) is not None:
-                            logger.debug("found branch", name=name)
                             yield BranchNode(name)
 
     def fetch_from_cassandra(self, nodes, start_time, end_time):
@@ -121,7 +151,7 @@ class KairosdbFinder(object):
                 row_key = "%s00%s00%s%s%s" % (
                     measurement.encode('hex'), "%016x" % row_timestamp, "%02x" % data_type_size, data_type.encode('hex'), tags.encode('hex')
                 )
-                
+                logger.debug("cassandra query", row_key=row_key)
                 start = (p['start'] - p['key']) * 1000
                 end = (p['end'] - p['key']) * 1000
 
@@ -139,45 +169,28 @@ class KairosdbFinder(object):
         for future in futures:
             rows = future.result()
             if len(rows) > 0:
-                row_key = self.parse_row_key(rows[0].key)
+                row_key = parse_row_key(rows[0].key)
                 path = node_index["%s\0%s" % (row_key['measurement'], row_key['tags'])]
                 
                 if path not in datapoints:
                     datapoints[path] = {}
 
                 for row in rows:
-                    ts = self.parse_row_ts(row.column1, row_key['row_timestamp'])
-                    if row_key['data_type'] == "kairos_double":
-                        value = struct.unpack(">d", row.value)[0]
-                    else:
-                        value = struct.unpack(">L", row.value)[0]
+                    ts = parse_row_ts(row.column1, row_key['row_timestamp'])
+                    try:
+                        if row_key['data_type'] == "kairos_double":
+                            value = struct.unpack(">d", row.value)[0]
+                        else:
+                            value = unpack_kairos_long(row.value)
+                        except Exception as e:
+                            logger.error("failed to parse value", exception=e, data_type=row_key['data_type'])
+                            value = None
                     datapoints[path][ts] = value
 
         return datapoints
 
-    def parse_row_ts(self, ts, row_timestamp):
-        timestamp = struct.unpack(">L", ts)[0]
-        timestamp = timestamp >> 1
-        return (timestamp + row_timestamp) / 1000
-
-    def parse_row_key(self, key):
-        #read to first null byte to get measurement name
-        measurement, key = key.split('\0', 1)
-        # the next 8 bytes are the row_timestamp
-        row_timestamp = struct.unpack(">q", key[:8])[0]
-        #byte 8 is a null byte,
-        #byte 9 is the length of the data_type label.
-        data_type_size = struct.unpack(">b", key[9:10])[0]
-        #From byte 10 for data_type_size bytes is the data_type label
-        data_type = key[10:10+data_type_size]
-        # the rest of the bytes are the tags string.
-        tags = key[10+data_type_size:]
-
-        return {"measurement": measurement, "row_timestamp": row_timestamp, "data_type": data_type, "tags": tags}
-
     def fetch_multi(self, nodes, start_time, end_time):
         step = None
-        start_time += 1
         for node in nodes:
             if step is None or node.reader.metric.interval < step:
                 step = node.reader.metric.interval
@@ -295,4 +308,3 @@ class KairosdbReader(object):
 
     def fetch(self, startTime, endTime):
         pass
-
