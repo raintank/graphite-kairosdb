@@ -9,11 +9,30 @@ import json
 from structlog import get_logger
 logger = get_logger()
 
-
 def debug(*args, **kwargs):
     import pprint
     pprint.pprint((args, kwargs))
 logger.debug = debug
+
+class NullStatsd():
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
+        pass
+
+    def timer(self, key, val=None):
+        return self
+
+    def timing(self, key, val):
+        pass
+
+try:
+    from graphite_api.app import app
+    statsd = app.statsd
+    assert statsd is not None
+except:
+    statsd = NullStatsd()
 
 class RaintankMetric(object):
     __slots__ = ('id', 'org_id', 'name', 'metric', 'interval', 'tags', 'thresholds',
@@ -94,53 +113,57 @@ class KairosdbFinder(object):
         max_points = -(-(end_time - (start_time - 1)) // step)
         for q in query['metrics']:
             q['limit'] = max_points
-        resp = requests.post("%s/api/v1/datapoints/query" % self.config['uri'], json.dumps(query))
+
+
+        with statsd.timer("graphite-api.fetch.kairosdb_query.query_duration"):
+            resp = requests.post("%s/api/v1/datapoints/query" % self.config['uri'], json.dumps(query))
         data = resp.json()
         series = {}
         delta = None
-        for i in range(0, len(data['queries'])):
-            datapoints = []
-            next_time = start_time
-            pos = 0
-            max_pos = len(data['queries'][i]['results'][0]['values'])
-            if max_pos == 0:
-                continue
-            logger.debug(
-                caller="fetch_multi()",
-                num_points=max_pos,
-                start_time=start_time,
-                end_time=end_time,
-                first_point=data['queries'][i]['results'][0]['values'][0][0],
-                last_point=data['queries'][i]['results'][0]['values'][-1][0]
-            )
-            while next_time <= end_time:
-                # check if there are missing values from the end of the time window
-                if pos >= max_pos:
-                    datapoints.append(None)
-                    next_time += step
+        with statsd.timer("graphite-api.fetch.unmarshal_kairosdb_resp.duration"):
+            for i in range(0, len(data['queries'])):
+                datapoints = []
+                next_time = start_time
+                pos = 0
+                max_pos = len(data['queries'][i]['results'][0]['values'])
+                if max_pos == 0:
                     continue
+                logger.debug(
+                    caller="fetch_multi()",
+                    num_points=max_pos,
+                    start_time=start_time,
+                    end_time=end_time,
+                    first_point=data['queries'][i]['results'][0]['values'][0][0],
+                    last_point=data['queries'][i]['results'][0]['values'][-1][0]
+                )
+                while next_time <= end_time:
+                    # check if there are missing values from the end of the time window
+                    if pos >= max_pos:
+                        datapoints.append(None)
+                        next_time += step
+                        continue
 
-                ts = data['queries'][i]['results'][0]['values'][pos][0]/1000
+                    ts = data['queries'][i]['results'][0]['values'][pos][0]/1000
 
-                # check if the first point is from before the start_time
-                if ts < start_time:
+                    # check if the first point is from before the start_time
+                    if ts < start_time:
+                        pos += 1
+                        continue
+
+                    # read in the metric value.
+                    v = data['queries'][i]['results'][0]['values'][pos][1]
+
+                    # pad missing points with null.
+                    while ts > (next_time + step):
+                        datapoints.append(None)
+                        next_time += step
+                    datapoints.append(v)
+                    if delta is None:
+                        delta = ts % next_time
+                    next_time += step
                     pos += 1
-                    continue
 
-                # read in the metric value.
-                v = data['queries'][i]['results'][0]['values'][pos][1]
-
-                # pad missing points with null.
-                while ts > (next_time + step):
-                    datapoints.append(None)
-                    next_time += step
-                datapoints.append(v)
-                if delta is None:
-                    delta = ts % next_time
-                next_time += step
-                pos += 1
-
-            series[nodes[i].path] = datapoints
+                series[nodes[i].path] = datapoints
         if delta is None:
             delta = 0
         time_info = (start_time + delta, end_time, step)
@@ -189,16 +212,18 @@ class KairosdbFinder(object):
             }
           }
         }
-        ret = self.es.search(index="definitions", doc_type="metric", body=search_body, size=10000 )
-        matches = []
-        if len(ret["hits"]["hits"]) > 0:
-            for hit in ret["hits"]["hits"]:
-                leaf = False
-                source = hit['_source']
-                if leaf_regex.match(source['name']) is not None:
-                    leaf = True
-                matches.append(RaintankMetric(source, leaf))
-        logger.debug('search_series', matches=len(matches))
+
+        with statsd.timer("graphite-api.search_series.es_search.query_duration"):
+            ret = self.es.search(index="definitions", doc_type="metric", body=search_body, size=10000 )
+            matches = []
+            if len(ret["hits"]["hits"]) > 0:
+                for hit in ret["hits"]["hits"]:
+                    leaf = False
+                    source = hit['_source']
+                    if leaf_regex.match(source['name']) is not None:
+                        leaf = True
+                    matches.append(RaintankMetric(source, leaf))
+            logger.debug('search_series', matches=len(matches))
         return matches
 
 
