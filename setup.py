@@ -25,6 +25,7 @@ setup(
     ),
     install_requires=(
         'cassandra-driver',
+        'blist',
         'elasticsearch',
         'flask',
         'graphite_api'
