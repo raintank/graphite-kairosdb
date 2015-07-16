@@ -154,7 +154,7 @@ class KairosdbFinder(object):
         for node in nodes:
             measurement = node.reader.metric.metric
             data_type = "kairos_double"  # this wont always be double, but there is no where that the date_type can be queried. :(
-            if node.reader.metric.unit == "state":
+            if node.reader.metric.unit in ["state", "count", "%"]:
                 data_type = "kairos_long"
             data_type_size = len(data_type)
             tags = ""
