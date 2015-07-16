@@ -218,41 +218,41 @@ class KairosdbFinder(object):
 
         with statsd.timer("graphite-api.fetch.kairosdb_query.query_duration"):
             data = self.fetch_from_cassandra(nodes, start_time, end_time)
-            series = {}
-            delta = None
-            with statsd.timer("graphite-api.fetch.unmarshal_kairosdb_resp.duration"):
-                for path, points in data.items():
-                    datapoints = []
-                    next_time = start_time;
-                    timestamps = points.keys()
-                    timestamps.sort()
-                    max_pos = len(timestamps)
-                    pos = 0;
-                    if max_pos == 0:
-                        continue
-                    if delta is None:
-                        delta = timestamps[0] % start_time
+        series = {}
+        delta = None
+        with statsd.timer("graphite-api.fetch.unmarshal_kairosdb_resp.duration"):
+            for path, points in data.items():
+                datapoints = []
+                next_time = start_time;
+                timestamps = points.keys()
+                timestamps.sort()
+                max_pos = len(timestamps)
+                pos = 0;
+                if max_pos == 0:
+                    continue
+                if delta is None:
+                    delta = timestamps[0] % start_time
 
-                    while next_time <= end_time:
-                        # check if there are missing values from the end of the time window
-                        if pos >= max_pos:
-                            datapoints.append(None)
-                            next_time += step
-                            continue
-
-                        ts = timestamps[pos]
-                        # read in the metric value.
-                        v = points[ts]
-
-                        # pad missing points with null.
-                        while ts > (next_time + step):
-                            datapoints.append(None)
-                            next_time += step
-
-                        datapoints.append(v)
+                while next_time <= end_time:
+                    # check if there are missing values from the end of the time window
+                    if pos >= max_pos:
+                        datapoints.append(None)
                         next_time += step
-                        pos += 1
-                    series[path] = datapoints
+                        continue
+
+                    ts = timestamps[pos]
+                    # read in the metric value.
+                    v = points[ts]
+
+                    # pad missing points with null.
+                    while ts > (next_time + step):
+                        datapoints.append(None)
+                        next_time += step
+
+                    datapoints.append(v)
+                    next_time += step
+                    pos += 1
+                series[path] = datapoints
 
         if delta is None:
             delta = 0
