@@ -189,24 +189,26 @@ class KairosdbFinder(object):
         datapoints = {}
         for future in futures:
             rows = future.result()
-            if len(rows) > 0:
-                row_key = parse_row_key(rows[0].key)
-                path = node_index["%s\0%s" % (row_key['measurement'], row_key['tags'])]
-                
-                if path not in datapoints:
-                    datapoints[path] = {}
+            first = True
+            for row in rows:
+                if first:
+                    row_key = parse_row_key(row.key)
+                    path = node_index["%s\0%s" % (row_key['measurement'], row_key['tags'])]
+                    
+                    if path not in datapoints:
+                        datapoints[path] = {}
+                    first = False
 
-                for row in rows:
-                    ts = parse_row_ts(row.column1, row_key['row_timestamp'])
-                    try:
-                        if row_key['data_type'] == "kairos_double":
-                            value = struct.unpack(">d", row.value)[0]
-                        else:
-                            value = unpack_kairos_long(row.value)
-                    except Exception as e:
-                        logger.error("failed to parse value", exception=e, data_type=row_key['data_type'])
-                        value = None
-                    datapoints[path][ts] = value
+                ts = parse_row_ts(row.column1, row_key['row_timestamp'])
+                try:
+                    if row_key['data_type'] == "kairos_double":
+                        value = struct.unpack(">d", row.value)[0]
+                    else:
+                        value = unpack_kairos_long(row.value)
+                except Exception as e:
+                    logger.error("failed to parse value", exception=e, data_type=row_key['data_type'])
+                    value = None
+                datapoints[path][ts] = value
 
         return datapoints
 
