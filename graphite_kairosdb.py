@@ -139,7 +139,7 @@ class KairosdbFinder(object):
         end_period = end_time - (end_time % 1814400)
         if start_period != end_period:
             pos = start_period + 1814400
-            count = 1
+            count = 0
             while pos <= end_period:
                 periods.append({'key': pos, 'start': pos, 'end': end_time})
                 # set the end_time range boundry of the last period to the end of that period.
@@ -178,7 +178,19 @@ class KairosdbFinder(object):
 
                 #The timestamps are shifted to support legacy datapoints that
                 #used the extra bit to determine if the value was long or double
-                query_args.append((bytearray(row_key.decode('hex')), bytearray(struct.pack(">L", start << 1)), bytearray(struct.pack(">L", end << 1 ))))
+                row_key_bytes = bytearray(row_key.decode('hex'))
+                try:
+                    start_bytes = bytearray(struct.pack(">L", start << 1))
+                except Exception as e:
+                    logger.error("failed to pack %d" % start)
+                    raise e
+                try:   
+                    end_bytes = bytearray(struct.pack(">L", end << 1 ))
+                except Exception as e:
+                    logger.error("failed to pack %d" % end)
+                    raise e
+
+                query_args.append((row_key_bytes, start_bytes , end_bytes))
 
         #perform cassandra queries in parrallel using async requests.
         futures = []
