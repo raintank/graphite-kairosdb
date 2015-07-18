@@ -159,7 +159,7 @@ class KairosdbFinder(object):
             data_type_size = len(data_type)
             tags = ""
             tag_list = node.reader.metric.tags
-            tag_list['org_id'] = 1
+            tag_list['org_id'] = g.org
             for tag, val in collections.OrderedDict(sorted(tag_list.items())).iteritems():
                 tags += "%s=%s:" % (tag, val)
 
