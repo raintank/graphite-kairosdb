@@ -245,7 +245,7 @@ class KairosdbFinder(object):
                 if max_pos == 0:
                     continue
                 if delta is None:
-                    delta = timestamps[0] % start_time
+                    delta = (timestamps[0] % start_time) % step
 
                 while next_time <= end_time:
                     # check if there are missing values from the end of the time window
