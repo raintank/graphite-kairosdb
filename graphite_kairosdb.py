@@ -151,6 +151,7 @@ class KairosdbFinder(object):
         # we store an array of tuples, where each tuple is the (row_key, start_offset, end_offset)
         query_args = []
         node_index = {}
+        datapoints = {}
         for node in nodes:
             measurement = node.reader.metric.metric
             data_type = "kairos_double"  # this wont always be double, but there is no where that the date_type can be queried. :(
@@ -165,6 +166,9 @@ class KairosdbFinder(object):
 
             #keep a map between the measurement+tags to the node.path
             node_index["%s\0%s" % (measurement, tags)] = node.path
+
+            #initialize where we will store the data.
+            datapoints[node.path] = {}
 
             # now build or query_args
             for p in periods:
@@ -198,7 +202,6 @@ class KairosdbFinder(object):
             futures.append(self.cassandra.execute_async(self.metric_lookup_stmt, args))
 
         # wait for them to complete and use the results
-        datapoints = {}
         for future in futures:
             rows = future.result()
             first = True
@@ -241,14 +244,20 @@ class KairosdbFinder(object):
                 timestamps = points.keys()
                 timestamps.sort()
                 max_pos = len(timestamps)
-                pos = 0;
+
                 if max_pos == 0:
+                    for i in range(int((end_time - start_time) / step)):
+                        datapoints.append(None)
+                    series[path] = datapoints
                     continue
+
+                pos = 0
+
                 if delta is None:
                     delta = (timestamps[0] % start_time) % step
                     # ts[0] is always greater then start_time.
                     if delta == 0:
-                        delta = 10
+                        delta = step
 
                 while next_time <= end_time:
                     # check if there are missing values from the end of the time window
@@ -269,6 +278,9 @@ class KairosdbFinder(object):
                     datapoints.append(v)
                     next_time += step
                     pos += 1
+                    if (ts + step) > end_time:
+                        break
+
                 series[path] = datapoints
 
         if delta is None:
