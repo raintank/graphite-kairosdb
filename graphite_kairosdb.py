@@ -71,22 +71,14 @@ except:
     statsd = NullStatsd()
 
 class RaintankMetric(object):
-    __slots__ = ('id', 'org_id', 'name', 'metric', 'interval', 'tags', 'thresholds',
-        'target_type', 'state', 'keepAlives', 'unit', 'lastUpdate', 'public', 'leaf')
+    __slots__ = ('id', 'org_id', 'name', 'metric', 'interval', 'tags',
+        'target_type', 'unit', 'lastUpdate', 'public', 'leaf')
 
     def __init__(self, source, leaf):
-        seenSlots = set()
-        self.tags = {}
         self.leaf = leaf
         for slot in RaintankMetric.__slots__:
             if slot in source:
                 setattr(self, slot, source[slot])
-                seenSlots.add(slot)
-
-        for k,v in source.iteritems():
-            if k in seenSlots:
-                continue
-            self.tags[k] = v
 
     def is_leaf(self):
         return self.leaf
