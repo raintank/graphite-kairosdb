@@ -325,7 +325,7 @@ class KairosdbFinder(object):
         }
 
         with statsd.timer("graphite-api.search_series.es_search.query_duration"):
-            ret = self.es.search(index="definitions", doc_type="metric", body=search_body, size=10000 )
+            ret = self.es.search(index="metric", doc_type="metric_index", body=search_body, size=10000 )
             matches = []
             if len(ret["hits"]["hits"]) > 0:
                 for hit in ret["hits"]["hits"]:

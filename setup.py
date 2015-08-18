@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='graphite-kairosdb',
-    version='0.1',
+    version='0.2',
     url='https://github.com/raintank/graphite-kairosdb',
     license='apache2',
     author='Anthony Woods',
