@@ -81,6 +81,7 @@ class RaintankMetric(object):
                 setattr(self, slot, source[slot])
 
     def is_leaf(self):
+        #logger.debug("is_leaf", leaf=self.leaf, name=self.name)
         return self.leaf
 
 
@@ -152,9 +153,10 @@ class KairosdbFinder(object):
             data_type_size = len(data_type)
             tags = ""
             tag_list = node.reader.metric.tags
-            tag_list['org_id'] = g.org
-            for tag, val in collections.OrderedDict(sorted(tag_list.items())).iteritems():
-                tags += "%s=%s:" % (tag, val)
+            tag_list.append('org_id:%d' % g.org)
+            for tag in sorted(tag_list):
+                parts = tag.split(":", 2)
+                tags += "%s=%s:" % (parts[0], parts[1])
 
             #keep a map between the measurement+tags to the node.path
             node_index["%s\0%s" % (measurement, tags)] = node.path
