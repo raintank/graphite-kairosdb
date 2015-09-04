@@ -71,24 +71,17 @@ except:
     statsd = NullStatsd()
 
 class RaintankMetric(object):
-    __slots__ = ('id', 'org_id', 'name', 'metric', 'interval', 'tags', 'thresholds',
-        'target_type', 'state', 'keepAlives', 'unit', 'lastUpdate', 'public', 'leaf')
+    __slots__ = ('id', 'org_id', 'name', 'metric', 'interval', 'tags',
+        'target_type', 'unit', 'lastUpdate', 'public', 'leaf')
 
     def __init__(self, source, leaf):
-        seenSlots = set()
-        self.tags = {}
         self.leaf = leaf
         for slot in RaintankMetric.__slots__:
             if slot in source:
                 setattr(self, slot, source[slot])
-                seenSlots.add(slot)
-
-        for k,v in source.iteritems():
-            if k in seenSlots:
-                continue
-            self.tags[k] = v
 
     def is_leaf(self):
+        #logger.debug("is_leaf", leaf=self.leaf, name=self.name)
         return self.leaf
 
 
@@ -160,9 +153,10 @@ class KairosdbFinder(object):
             data_type_size = len(data_type)
             tags = ""
             tag_list = node.reader.metric.tags
-            tag_list['org_id'] = g.org
-            for tag, val in collections.OrderedDict(sorted(tag_list.items())).iteritems():
-                tags += "%s=%s:" % (tag, val)
+            tag_list.append('org_id:%d' % g.org)
+            for tag in sorted(tag_list):
+                parts = tag.split(":", 2)
+                tags += "%s=%s:" % (parts[0], parts[1])
 
             #keep a map between the measurement+tags to the node.path
             node_index["%s\0%s" % (measurement, tags)] = node.path
@@ -333,7 +327,7 @@ class KairosdbFinder(object):
         }
 
         with statsd.timer("graphite-api.search_series.es_search.query_duration"):
-            ret = self.es.search(index="definitions", doc_type="metric", body=search_body, size=10000 )
+            ret = self.es.search(index="metric", doc_type="metric_index", body=search_body, size=10000 )
             matches = []
             if len(ret["hits"]["hits"]) > 0:
                 for hit in ret["hits"]["hits"]:
