@@ -147,10 +147,6 @@ class KairosdbFinder(object):
         datapoints = {}
         for node in nodes:
             measurement = node.reader.metric.metric
-            data_type = "kairos_double"  # this wont always be double, but there is no where that the date_type can be queried. :(
-            if node.reader.metric.unit in ["state", "count", "%"]:
-                data_type = "kairos_long"
-            data_type_size = len(data_type)
             tags = ""
             tag_list = node.reader.metric.tags
             tag_list.append('org_id:%d' % g.org)
@@ -165,30 +161,32 @@ class KairosdbFinder(object):
             datapoints[node.path] = {}
 
             # now build or query_args
-            for p in periods:
-                row_timestamp = p['key'] * 1000
-                row_key = "%s00%s00%s%s%s" % (
-                    measurement.encode('hex'), "%016x" % row_timestamp, "%02x" % data_type_size, data_type.encode('hex'), tags.encode('hex')
-                )
-                logger.debug("cassandra query", row_key=row_key)
-                start = (p['start'] - p['key']) * 1000
-                end = (p['end'] - p['key']) * 1000
+            for data_type in ["kairos_double", "kairos_long"]: #request both double and long values as kairos makes it impossible to know which in advance.
+                data_type_size = len(data_type)
+                for p in periods:
+                    row_timestamp = p['key'] * 1000
+                    row_key = "%s00%s00%s%s%s" % (
+                        measurement.encode('hex'), "%016x" % row_timestamp, "%02x" % data_type_size, data_type.encode('hex'), tags.encode('hex')
+                    )
+                    logger.debug("cassandra query", row_key=row_key)
+                    start = (p['start'] - p['key']) * 1000
+                    end = (p['end'] - p['key']) * 1000
 
-                #The timestamps are shifted to support legacy datapoints that
-                #used the extra bit to determine if the value was long or double
-                row_key_bytes = bytearray(row_key.decode('hex'))
-                try:
-                    start_bytes = bytearray(struct.pack(">L", start << 1))
-                except Exception as e:
-                    logger.error("failed to pack %d" % start)
-                    raise e
-                try:   
-                    end_bytes = bytearray(struct.pack(">L", end << 1 ))
-                except Exception as e:
-                    logger.error("failed to pack %d" % end)
-                    raise e
+                    #The timestamps are shifted to support legacy datapoints that
+                    #used the extra bit to determine if the value was long or double
+                    row_key_bytes = bytearray(row_key.decode('hex'))
+                    try:
+                        start_bytes = bytearray(struct.pack(">L", start << 1))
+                    except Exception as e:
+                        logger.error("failed to pack %d" % start)
+                        raise e
+                    try:
+                        end_bytes = bytearray(struct.pack(">L", end << 1 ))
+                    except Exception as e:
+                        logger.error("failed to pack %d" % end)
+                        raise e
 
-                query_args.append((row_key_bytes, start_bytes , end_bytes))
+                    query_args.append((row_key_bytes, start_bytes , end_bytes))
 
         #perform cassandra queries in parrallel using async requests.
         futures = []
@@ -278,7 +276,7 @@ class KairosdbFinder(object):
                 series[path] = datapoints
 
         if delta is None:
-            delta = 0
+            delta = 1
         time_info = (start_time + delta, end_time, step)
         return time_info, series
 
