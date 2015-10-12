@@ -111,17 +111,30 @@ class KairosdbFinder(object):
         leaf_regex = self.compile_regex(query, False)
         #query Elasticsearch for paths
         matches = self.search_series(leaf_regex, query)
+        leafs = {}
+        branches = {}
         for metric in matches:
             if metric.is_leaf():
-                yield KairosdbLeafNode(metric.name, KairosdbReader(self.config, metric))
+                if metric.name in leafs:
+                    leafs[metric.name].append(metric)
+                else:
+                    leafs[metric.name] = [metric]
             else:
-                name = metric.name
-                while '.' in name:
-                    name = name.rsplit('.', 1)[0]
-                    if name not in seen_branches:
-                        seen_branches.add(name)
-                        if leaf_regex.match(name) is not None:
-                            yield BranchNode(name)
+                if metric.name in branches:
+                    branches[metric.name].append(metric)
+                else:
+                    branches[metric.name] = [metric]
+
+        for name, metrics in leafs.iteritems():    
+            yield KairosdbLeafNode(name, KairosdbReader(self.config, metrics))
+        for branchName, metrics in branches.iteritems():
+            name = branchName
+            while '.' in name:
+                name = name.rsplit('.', 1)[0]
+                if name not in seen_branches:
+                    seen_branches.add(name)
+                    if leaf_regex.match(name) is not None:
+                        yield BranchNode(name)
 
     def fetch_from_cassandra(self, nodes, start_time, end_time):
         # datapoints are stored in rows that spane a 3week period.
@@ -146,47 +159,48 @@ class KairosdbFinder(object):
         node_index = {}
         datapoints = {}
         for node in nodes:
-            measurement = node.reader.metric.metric
-            tags = ""
-            tag_list = node.reader.metric.tags
-            tag_list.append('org_id:%d' % g.org)
-            for tag in sorted(tag_list):
-                parts = tag.split(":", 2)
-                tags += "%s=%s:" % (parts[0], parts[1])
+            for metric in node.reader.metrics:
+                measurement = metric.metric
+                tags = ""
+                tag_list = metric.tags
+                tag_list.append('org_id:%d' % g.org)
+                for tag in sorted(tag_list):
+                    parts = tag.split(":", 2)
+                    tags += "%s=%s:" % (parts[0], parts[1])
 
-            #keep a map between the measurement+tags to the node.path
-            node_index["%s\0%s" % (measurement, tags)] = node.path
+                #keep a map between the measurement+tags to the node.path
+                node_index["%s\0%s" % (measurement, tags)] = node.path
 
-            #initialize where we will store the data.
-            datapoints[node.path] = {}
+                #initialize where we will store the data.
+                datapoints[node.path] = {}
 
-            # now build or query_args
-            for data_type in ["kairos_double", "kairos_long"]: #request both double and long values as kairos makes it impossible to know which in advance.
-                data_type_size = len(data_type)
-                for p in periods:
-                    row_timestamp = p['key'] * 1000
-                    row_key = "%s00%s00%s%s%s" % (
-                        measurement.encode('hex'), "%016x" % row_timestamp, "%02x" % data_type_size, data_type.encode('hex'), tags.encode('hex')
-                    )
-                    logger.debug("cassandra query", row_key=row_key)
-                    start = (p['start'] - p['key']) * 1000
-                    end = (p['end'] - p['key']) * 1000
+                # now build or query_args
+                for data_type in ["kairos_double", "kairos_long"]: #request both double and long values as kairos makes it impossible to know which in advance.
+                    data_type_size = len(data_type)
+                    for p in periods:
+                        row_timestamp = p['key'] * 1000
+                        row_key = "%s00%s00%s%s%s" % (
+                            measurement.encode('hex'), "%016x" % row_timestamp, "%02x" % data_type_size, data_type.encode('hex'), tags.encode('hex')
+                        )
+                        logger.debug("cassandra query", row_key=row_key)
+                        start = (p['start'] - p['key']) * 1000
+                        end = (p['end'] - p['key']) * 1000
 
-                    #The timestamps are shifted to support legacy datapoints that
-                    #used the extra bit to determine if the value was long or double
-                    row_key_bytes = bytearray(row_key.decode('hex'))
-                    try:
-                        start_bytes = bytearray(struct.pack(">L", start << 1))
-                    except Exception as e:
-                        logger.error("failed to pack %d" % start)
-                        raise e
-                    try:
-                        end_bytes = bytearray(struct.pack(">L", end << 1 ))
-                    except Exception as e:
-                        logger.error("failed to pack %d" % end)
-                        raise e
+                        #The timestamps are shifted to support legacy datapoints that
+                        #used the extra bit to determine if the value was long or double
+                        row_key_bytes = bytearray(row_key.decode('hex'))
+                        try:
+                            start_bytes = bytearray(struct.pack(">L", start << 1))
+                        except Exception as e:
+                            logger.error("failed to pack %d" % start)
+                            raise e
+                        try:
+                            end_bytes = bytearray(struct.pack(">L", end << 1 ))
+                        except Exception as e:
+                            logger.error("failed to pack %d" % end)
+                            raise e
 
-                    query_args.append((row_key_bytes, start_bytes , end_bytes))
+                        query_args.append((row_key_bytes, start_bytes , end_bytes))
 
         #perform cassandra queries in parrallel using async requests.
         futures = []
@@ -222,8 +236,9 @@ class KairosdbFinder(object):
     def fetch_multi(self, nodes, start_time, end_time):
         step = None
         for node in nodes:
-            if step is None or node.reader.metric.interval < step:
-                step = node.reader.metric.interval
+            for metric in node.reader.metrics:
+                if step is None or metric.interval < step:
+                    step = metric.interval
 
         with statsd.timer("graphite-api.fetch.kairosdb_query.query_duration"):
             data = self.fetch_from_cassandra(nodes, start_time, end_time)
@@ -310,7 +325,7 @@ class KairosdbFinder(object):
                     },
                     {
                         "term": {
-                           "public": True
+                           "org_id": -1
                         }
                     }
                 ]
@@ -343,14 +358,15 @@ class KairosdbLeafNode(LeafNode):
 
 
 class KairosdbReader(object):
-    __slots__ = ('config', 'metric')
+    __slots__ = ('config', 'metrics')
 
-    def __init__(self, config, metric):
+    def __init__(self, config, metrics):
         self.config = config
-        self.metric = metric
+        self.metrics = metrics
 
     def get_intervals(self):
         return IntervalSet([Interval(0, time.time())])
 
     def fetch(self, startTime, endTime):
         pass
+
